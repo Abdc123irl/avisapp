@@ -1,0 +1,108 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; background: #f0f0f0; padding: 20px; }
+    #messages { height: 300px; overflow-y: scroll; background: white; padding: 10px; border: 1px solid #ccc; }
+    video { width: 200px; height: 150px; }
+  </style>
+</head>
+<body>
+  <h2>Welcome to Chat</h2>
+  <div id="users"></div>
+  <div id="messages"></div>
+  <input id="messageInput" placeholder="Type a message..." />
+  <button onclick="sendMessage()">Send</button>
+  <br><br>
+  <button onclick="startCall()">Start Call</button>
+  <video id="localVideo" autoplay muted></video>
+  <video id="remoteVideo" autoplay></video>
+
+  <script src="https://cdn.socket.io/4.3.2/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    const username = 'GoogleUser';
+    socket.emit('login', username);
+
+    const usersDiv = document.getElementById('users');
+    const messagesDiv = document.getElementById('messages');
+    const messageInput = document.getElementById('messageInput');
+
+    function sendMessage() {
+      const msg = messageInput.value;
+      if (msg) {
+        socket.emit('sendMessage', { user: username, text: msg });
+        messageInput.value = '';
+      }
+    }
+
+    socket.on('receiveMessage', data => {
+      const p = document.createElement('p');
+      p.innerText = `${data.user}: ${data.text}`;
+      messagesDiv.appendChild(p);
+    });
+
+    socket.on('users', users => {
+      usersDiv.innerHTML = '<b>Online Users:</b><br>' + users.join(', ');
+    });
+
+    let localStream;
+    let peerConn;
+
+    async function startCall() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      peerConn = new RTCPeerConnection();
+      localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
+
+      peerConn.ontrack = event => {
+        document.getElementById('remoteVideo').srcObject = event.streams[0];
+      };
+
+      peerConn.onicecandidate = e => {
+        if (e.candidate) socket.emit('ice-candidate', e.candidate);
+      };
+
+      const offer = await peerConn.createOffer();
+      await peerConn.setLocalDescription(offer);
+      socket.emit('offer', offer);
+    }
+
+    socket.on('offer', async offer => {
+      peerConn = new RTCPeerConnection();
+      peerConn.ontrack = e => {
+        document.getElementById('remoteVideo').srcObject = e.streams[0];
+      };
+      peerConn.onicecandidate = e => {
+        if (e.candidate) socket.emit('ice-candidate', e.candidate);
+      };
+
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+      localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
+
+      await peerConn.setRemoteDescription(offer);
+      const answer = await peerConn.createAnswer();
+      await peerConn.setLocalDescription(answer);
+      socket.emit('answer', answer);
+    });
+
+    socket.on('answer', async answer => {
+      await peerConn.setRemoteDescription(answer);
+    });
+
+    socket.on('ice-candidate', async candidate => {
+      try {
+        await peerConn.addIceCandidate(candidate);
+      } catch (err) {
+        console.error('ICE error:', err);
+      }
+    });
+  </script>
+</body>
+</html>
